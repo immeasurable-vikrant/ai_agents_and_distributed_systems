@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>P6 — Live Debate</title>
+<style>
+  *{box-sizing:border-box;font-family:system-ui,sans-serif}
+  body{max-width:940px;margin:24px auto;padding:0 18px;background:#f6f7f9;color:#1a1a1a}
+  h1{margin-bottom:2px}.sub{color:#666;font-size:14px;margin-bottom:14px}
+  .panel{background:#fff;border:1px solid #e3e3e6;border-radius:10px;padding:16px;margin-bottom:14px}
+  input{width:100%;padding:10px;border:1px solid #ccc;border-radius:6px;font-size:14px}
+  button{padding:9px 16px;background:#2563eb;color:#fff;border:0;border-radius:6px;cursor:pointer;font-size:13px;margin:9px 6px 0 0}
+  button:hover{background:#1d4ed8}button:disabled{background:#9ca3af}
+  button.approve{background:#16a34a}button.reject{background:#dc2626}button.ghost{background:#6b7280}
+  .bubble{padding:11px 14px;border-radius:11px;margin:9px 0;max-width:82%;font-size:13.5px;line-height:1.45}
+  .bubble.advocate{background:#dbeafe;margin-right:auto;border-bottom-left-radius:3px}
+  .bubble.skeptic{background:#fef3c7;margin-left:auto;border-bottom-right-radius:3px}
+  .who{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;opacity:.6;margin-bottom:3px}
+  .cursor{display:inline-block;width:7px;height:14px;background:#2563eb;animation:b .8s infinite;vertical-align:text-bottom}
+  @keyframes b{0%,49%{opacity:1}50%,100%{opacity:0}}
+  .verdict{background:#f0f7ff;border-left:4px solid #2563eb;padding:12px 14px;border-radius:5px;margin:12px 0;font-size:13.5px}
+  .pause{background:#fff7ed;border:2px solid #f59e0b;border-radius:9px;padding:14px;margin-top:12px}
+  .status{font-size:12px;color:#666;margin-bottom:9px}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px}
+  .dot.live{background:#16a34a;animation:p 1.2s infinite}.dot.idle{background:#9ca3af}
+  .dot.paused{background:#f59e0b}
+  @keyframes p{0%,100%{opacity:1}50%{opacity:.3}}
+  pre{background:#1e1e1e;color:#d4d4d4;padding:11px;border-radius:6px;font-size:11.5px;overflow-x:auto}
+  .note{background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px 14px;font-size:13.5px}
+  .ex{font-size:12.5px;color:#666;margin-top:7px}
+  .ex span{color:#2563eb;cursor:pointer;text-decoration:underline;margin-right:11px}
+</style>
+</head>
+<body>
+
+<h1>🎙️ Live Debate</h1>
+<div class="sub">Two agents argue, streamed token by token. High-risk verdicts pause for you — durably.</div>
+
+<div class="panel">
+  <input id="topic" value="Should we double our Q4 advertising budget?">
+  <button onclick="start()" id="btn">▶ Start Debate</button>
+  <button class="ghost" onclick="reload()">↻ Reload from DB</button>
+  <button class="ghost" onclick="showGraph()">Graph</button>
+  <div class="ex">
+    Try:
+    <span onclick="setT('Should we lay off 30% of engineering to reach profitability?')">high risk</span>
+    <span onclick="setT('Should the team use tabs or spaces for indentation?')">low risk</span>
+  </div>
+  <div id="graphbox"></div>
+</div>
+
+<div class="panel">
+  <div class="status" id="status"><span class="dot idle"></span>idle</div>
+  <div id="stage"></div>
+  <div id="approval"></div>
+</div>
+
+<div class="note">
+  <b>The thing to actually test.</b> Start a high-risk debate and wait for
+  the amber approval box. Now <code>Ctrl-C</code> the server and restart it.
+  Click <i>Reload from DB</i> — the debate is still there, still paused,
+  still waiting. Approve it and it finishes.<br><br>
+  That works because <code>interrupt()</code> saved the graph to a
+  <b>checkpoint database</b>, not to an <code>asyncio.Event</code> in
+  memory. The naive in-memory version looks identical until the first
+  restart, at which point the run is stranded forever with no error.
+</div>
+
+<script>
+let threadId = null, ws = null, bubbles = {};
+const setT = t => document.getElementById('topic').value = t;
+
+function setStatus(kind, text) {
+  document.getElementById('status').innerHTML = `<span class="dot ${kind}"></span>${text}`;
+}
+
+async function start() {
+  const topic = document.getElementById('topic').value.trim();
+  if (topic.length < 10) return alert('Topic too short');
+
+  const r = await fetch('/api/debates', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ topic }),
+  });
+  const d = await r.json();
+  threadId = d.thread_id;
+
+  document.getElementById('stage').innerHTML = '';
+  document.getElementById('approval').innerHTML = '';
+  bubbles = {};
+  document.getElementById('btn').disabled = true;
+  setStatus('live', 'debating…');
+
+  ws = new WebSocket(`ws://${location.host}/ws/debate/${threadId}`);
+  ws.onopen = () => ws.send(topic);
+  ws.onmessage = e => handle(JSON.parse(e.data));
+  ws.onclose = () => { document.getElementById('btn').disabled = false; };
+}
+
+function handle(ev) {
+  const stage = document.getElementById('stage');
+
+  if (ev.type === 'token') {
+    // LIVE TYPING: append each token to the current speaker's bubble
+    const node = ev.node;
+    if (!bubbles[node]) {
+      const el = document.createElement('div');
+      el.className = `bubble ${node}`;
+      el.innerHTML = `<div class="who">${node}</div><span class="txt"></span><span class="cursor"></span>`;
+      stage.appendChild(el);
+      bubbles[node] = el;
+    }
+    bubbles[node].querySelector('.txt').textContent += ev.text;
+    bubbles[node].scrollIntoView({behavior:'smooth', block:'end'});
+  }
+
+  else if (ev.type === 'turn_end') {
+    const el = bubbles[ev.node];
+    if (el) { el.querySelector('.cursor')?.remove(); }
+    // New bubble for this speaker's NEXT turn
+    delete bubbles[ev.node];
+  }
+
+  else if (ev.type === 'verdict') {
+    stage.innerHTML += `<div class="verdict"><b>VERDICT</b>
+      <span style="font-size:11px;padding:2px 8px;border-radius:9px;background:${ev.approved?'#dcfce7':'#fef3c7'};color:${ev.approved?'#166534':'#92400e'}">
+      ${ev.approved ? 'low risk — auto-approved' : 'high risk'}</span>
+      <div style="margin-top:6px">${esc(ev.verdict)}</div></div>`;
+  }
+
+  else if (ev.type === 'interrupt') {
+    setStatus('paused', 'paused — waiting for you');
+    document.getElementById('approval').innerHTML = `
+      <div class="pause">
+        <b>⏸ ${esc(ev.payload.reason)}</b>
+        <div style="margin:7px 0;font-size:13.5px">${esc(ev.payload.verdict)}</div>
+        <button class="approve" onclick="decide('approve')">✓ Approve</button>
+        <button class="reject" onclick="decide('reject')">✕ Reject</button>
+        <div style="font-size:12px;color:#92400e;margin-top:8px">
+          The graph is frozen in the database. Restart the server and it's still here.
+        </div>
+      </div>`;
+  }
+
+  else if (ev.type === 'done') { setStatus('idle', 'complete'); }
+  else if (ev.type === 'error') {
+    setStatus('idle', 'error');
+    stage.innerHTML += `<div class="verdict" style="border-color:#dc2626;background:#fef2f2">${esc(ev.message)}</div>`;
+  }
+}
+
+async function decide(decision) {
+  document.getElementById('approval').innerHTML = '<div style="color:#666;font-size:13px">resuming…</div>';
+  const r = await fetch(`/api/debates/${threadId}/decide`, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ decision }),
+  });
+  const d = await r.json();
+  if (!r.ok) { document.getElementById('approval').innerHTML = `<div style="color:#dc2626">${esc(d.detail)}</div>`; return; }
+  document.getElementById('approval').innerHTML =
+    `<div class="verdict"><b>${d.approved ? '✅ Approved' : '❌ Rejected'}</b>
+     <div style="margin-top:5px">${esc(d.verdict)}</div></div>`;
+  setStatus('idle', 'complete');
+}
+
+async function reload() {
+  if (!threadId) return alert('Start a debate first (or paste a thread id in the URL)');
+  const r = await fetch(`/api/debates/${threadId}`);
+  if (!r.ok) return alert('Not found');
+  const d = await r.json();
+
+  document.getElementById('stage').innerHTML = d.turns.map(t =>
+    `<div class="bubble ${t.role}"><div class="who">${t.role} · round ${t.round}</div>${esc(t.text)}</div>`
+  ).join('') + (d.verdict ? `<div class="verdict"><b>VERDICT</b><div style="margin-top:6px">${esc(d.verdict)}</div></div>` : '');
+
+  if (d.paused_at.length) {
+    setStatus('paused', `paused at: ${d.paused_at.join(', ')}`);
+    document.getElementById('approval').innerHTML = `
+      <div class="pause"><b>⏸ Still waiting — recovered from the database</b>
+      <div style="margin:7px 0;font-size:13.5px">${esc(d.verdict)}</div>
+      <button class="approve" onclick="decide('approve')">✓ Approve</button>
+      <button class="reject" onclick="decide('reject')">✕ Reject</button></div>`;
+  } else {
+    setStatus('idle', d.approved ? 'complete (approved)' : 'complete');
+    document.getElementById('approval').innerHTML = '';
+  }
+}
+
+async function showGraph() {
+  const box = document.getElementById('graphbox');
+  if (box.innerHTML) { box.innerHTML=''; return; }
+  const d = await fetch('/api/graph').then(r=>r.json());
+  box.innerHTML = `<pre>${esc(d.diagram)}</pre>`;
+}
+
+function esc(s){const d=document.createElement('div');d.textContent=s??'';return d.innerHTML}
+</script>
+</body>
+</html>

@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>P5 — SandboxExec</title>
+<style>
+  *{box-sizing:border-box;font-family:system-ui,sans-serif}
+  body{max-width:1080px;margin:24px auto;padding:0 18px;background:#f6f7f9;color:#1a1a1a}
+  h1{margin-bottom:2px}.sub{color:#666;font-size:14px;margin-bottom:14px}
+  .panel{background:#fff;border:1px solid #e3e3e6;border-radius:10px;padding:16px;margin-bottom:16px}
+  h2{margin:0 0 4px;font-size:16px}.hint{font-size:12px;color:#888;margin-bottom:11px}
+  input,textarea{width:100%;padding:9px;border:1px solid #ccc;border-radius:6px;font-size:13.5px}
+  textarea{font-family:ui-monospace,monospace;font-size:12.5px;min-height:110px}
+  button{padding:9px 16px;background:#2563eb;color:#fff;border:0;border-radius:6px;cursor:pointer;font-size:13px;margin:9px 6px 0 0}
+  button:hover{background:#1d4ed8}button.ghost{background:#6b7280}button:disabled{background:#9ca3af}
+  .banner{padding:9px 13px;border-radius:7px;font-size:13px;margin-bottom:14px}
+  .banner.docker{background:#dcfce7;color:#166534;border:1px solid #86efac}
+  .banner.sub{background:#fef3c7;color:#92400e;border:1px solid #fde68a}
+  pre{background:#1e1e1e;color:#d4d4d4;padding:11px;border-radius:6px;font-size:12px;overflow-x:auto;white-space:pre-wrap}
+  .out{border-left:3px solid #10b981;padding:8px 11px;margin:7px 0;background:#f0fdf4;border-radius:4px;font-size:13px}
+  .out.fail{border-left-color:#dc2626;background:#fef2f2}
+  .step{border-left:3px solid #d1d5db;padding:6px 10px;margin:5px 0;font-size:12.5px;background:#fafafa;border-radius:4px}
+  .step.understand{border-left-color:#8b5cf6}.step.coder{border-left-color:#f59e0b}
+  .step.explain{border-left-color:#2563eb}
+  .badge{display:inline-block;padding:2px 8px;border-radius:9px;font-size:10.5px;font-weight:600;margin-left:5px}
+  .badge.ok{background:#dcfce7;color:#166534}.badge.no{background:#fee2e2;color:#991b1b}
+  .ex{font-size:12.5px;color:#666;margin-top:7px}
+  .ex span{color:#2563eb;cursor:pointer;text-decoration:underline;margin-right:11px}
+  .note{background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px 14px;font-size:13.5px}
+</style>
+</head>
+<body>
+
+<h1>🔒 SandboxExec</h1>
+<div class="sub">An agent that writes code, runs it in a sandbox, reads the error, and fixes itself.</div>
+
+<div id="banner"></div>
+
+<!-- ============ AGENT ============ -->
+<div class="panel">
+  <h2>🤖 Code Agent</h2>
+  <div class="hint">understand → <b>[ write → execute → fix ]</b> → explain &nbsp;· the bracketed part is a subgraph</div>
+
+  <input id="req" value="What is the 25th Fibonacci number?">
+  <button onclick="runSolve()" id="btn">▶ Solve</button>
+  <button class="ghost" onclick="showGraph()">Graphs</button>
+  <div class="ex">
+    Try:
+    <span onclick="setR('How many primes are below 1000?')">easy</span>
+    <span onclick="setR('Sort this list and give the median: 45,12,89,3,67,23,91,8')">data</span>
+    <span onclick="setR('Fetch the current price of bitcoin from an API')">impossible (no network)</span>
+  </div>
+  <div id="graphbox"></div>
+  <div id="solveout"></div>
+</div>
+
+<!-- ============ ATTACK ============ -->
+<div class="panel">
+  <h2>💥 Attack Your Own Sandbox</h2>
+  <div class="hint">No LLM involved — paste code and watch the limits fire</div>
+
+  <textarea id="code">import os
+print("env vars visible:", len(os.environ))
+print("OPENAI_API_KEY =", os.environ.get("OPENAI_API_KEY"))</textarea>
+  <button onclick="runRaw()">▶ Run in sandbox</button>
+  <div class="ex">
+    Attacks:
+    <span onclick="setC('import os\nprint(os.environ.get(\'OPENAI_API_KEY\'))')">read secrets</span>
+    <span onclick="setC('f=open(\'/tmp/pwned.txt\',\'w\')\nf.write(\'SECRET DATA\')\nf.flush()\nprint(\'exfiltrated\')')">write a file</span>
+    <span onclick="setC('import urllib.request\nprint(urllib.request.urlopen(\'https://example.com\',timeout=3).status)')">phone home</span>
+    <span onclick="setC('while True: pass')">infinite loop</span>
+    <span onclick="setC('import os\n[os.fork() for _ in range(40)]\nprint(\'forked\')')">fork bomb</span>
+  </div>
+  <div id="rawout"></div>
+</div>
+
+<div class="note">
+  <b>What to notice.</b> The agent's retry loop lives in a <i>subgraph</i> —
+  the parent trace shows 3 steps even when the coder internally wrote, ran,
+  failed, and rewrote. That's the boundary doing its job: the parent
+  doesn't need to know about <code>attempts</code> or <code>stderr</code>.<br><br>
+  <b>And try the "impossible" example.</b> Ask it to fetch a bitcoin price.
+  The sandbox has no network, so the code fails, the agent reads the error,
+  rewrites — and fails again, because the problem is structural, not a bug.
+  After 2 attempts it stops and <i>says so honestly</i>. A bounded retry
+  loop that admits defeat is better than one that loops forever.
+</div>
+
+<script>
+const setR = t => document.getElementById('req').value = t;
+const setC = t => document.getElementById('code').value = t;
+
+(async () => {
+  const h = await fetch('/api/health').then(r => r.json());
+  const b = document.getElementById('banner');
+  if (h.sandbox_backend === 'docker') {
+    b.className = 'banner docker';
+    b.innerHTML = '🐳 <b>Docker backend</b> — strong isolation: no network, capped memory/CPU/pids, read-only filesystem.';
+  } else {
+    b.className = 'banner sub';
+    b.innerHTML = '⚠️ <b>Subprocess fallback</b> — Docker not found. Blocks file writes, fork bombs and secrets, but shares your kernel and network. Install Docker for real isolation.';
+  }
+})();
+
+async function runSolve() {
+  const request = document.getElementById('req').value.trim();
+  const btn = document.getElementById('btn');
+  btn.disabled = true; btn.textContent = '⏳ thinking…';
+  document.getElementById('solveout').innerHTML = '';
+
+  const d = await post('/api/solve', { request });
+  btn.disabled = false; btn.textContent = '▶ Solve';
+  if (d.error) { document.getElementById('solveout').innerHTML = `<div class="out fail">${esc(d.error)}</div>`; return; }
+
+  let html = '';
+  for (const t of d.trace) {
+    html += `<div class="step ${t.type}"><b style="font-size:10px;text-transform:uppercase;color:#666">${t.type}</b>`;
+    if (t.task) html += ` ${esc(t.task)}`;
+    if (t.type === 'coder') {
+      html += `<span class="badge ${t.success?'ok':'no'}">${t.success?'ran':'failed'}</span>
+               <span class="badge" style="background:#e0e7ff;color:#3730a3">${t.attempts} attempt${t.attempts>1?'s':''}</span>
+               <pre>${esc(t.code)}</pre>`;
+      if (t.stdout) html += `<div class="out">${esc(t.stdout)}</div>`;
+      if (t.stderr) html += `<div class="out fail">${esc(t.stderr)}</div>`;
+    }
+    if (t.content) html += `<div style="margin-top:4px">${esc(t.content)}</div>`;
+    html += `</div>`;
+  }
+  document.getElementById('solveout').innerHTML = html;
+}
+
+async function runRaw() {
+  const code = document.getElementById('code').value;
+  document.getElementById('rawout').innerHTML = '<div style="color:#666;margin-top:8px">⏳ running…</div>';
+  const d = await post('/api/run', { code });
+  const cls = d.success ? 'out' : 'out fail';
+  document.getElementById('rawout').innerHTML = `
+    <div class="${cls}" style="margin-top:9px">
+      <b>${d.success ? '✅ ran' : '🛡️ blocked / failed'}</b>
+      <span class="badge" style="background:#e0e7ff;color:#3730a3">${esc(d.backend)}</span>
+      <span class="badge" style="background:#f3f4f6;color:#444">exit ${d.exit_code}</span>
+    </div>
+    ${d.stdout ? `<pre>${esc(d.stdout)}</pre>` : ''}
+    ${d.stderr ? `<pre style="background:#450a0a;color:#fca5a5">${esc(d.stderr)}</pre>` : ''}`;
+}
+
+async function showGraph() {
+  const box = document.getElementById('graphbox');
+  if (box.innerHTML) { box.innerHTML=''; return; }
+  const d = await fetch('/api/graph').then(r=>r.json());
+  box.innerHTML = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px">
+    <div><b style="font-size:12px">PARENT</b><pre>${esc(d.parent)}</pre></div>
+    <div><b style="font-size:12px">CODER SUBGRAPH</b><pre>${esc(d.subgraph)}</pre></div></div>`;
+}
+
+async function post(url, body) {
+  try {
+    const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const d = await r.json();
+    return r.ok ? d : { error: d.detail || 'failed' };
+  } catch (e) { return { error: e.message }; }
+}
+
+function esc(s){const d=document.createElement('div');d.textContent=s??'';return d.innerHTML}
+</script>
+</body>
+</html>

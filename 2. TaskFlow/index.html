@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>P2 — TaskFlow</title>
+<style>
+  *{box-sizing:border-box;font-family:system-ui,sans-serif}
+  body{max-width:1150px;margin:26px auto;padding:0 18px;background:#f6f7f9;color:#1a1a1a}
+  h1{margin-bottom:2px}.sub{color:#666;font-size:14px;margin-bottom:18px}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .panel{background:#fff;border:1px solid #e3e3e6;border-radius:10px;padding:16px}
+  .panel h2{margin:0 0 3px;font-size:16px}
+  .panel .hint{font-size:12px;color:#888;margin-bottom:12px}
+  input,select{width:100%;padding:9px;border:1px solid #ccc;border-radius:6px;font-size:14px;margin-bottom:8px}
+  button{padding:8px 15px;background:#2563eb;color:#fff;border:0;border-radius:6px;cursor:pointer;font-size:13px;margin-right:6px}
+  button:hover{background:#1d4ed8}
+  button.ghost{background:#6b7280}
+  .task{display:flex;align-items:center;gap:9px;padding:8px 10px;border:1px solid #eee;border-radius:6px;margin-bottom:6px;font-size:13.5px}
+  .task.done .title{text-decoration:line-through;color:#999}
+  .title{flex:1}
+  .tag{font-size:10.5px;padding:2px 8px;border-radius:9px;color:#fff;font-weight:600}
+  .x{color:#dc2626;cursor:pointer;font-weight:700;padding:0 4px}
+  .msg{padding:9px 12px;border-radius:9px;margin:7px 0;font-size:13.5px;max-width:88%}
+  .msg.user{background:#dbeafe;margin-left:auto}
+  .msg.bot{background:#f1f3f5}
+  #chatlog{height:230px;overflow-y:auto;border:1px solid #eee;border-radius:7px;padding:10px;margin-bottom:9px;background:#fafafa}
+  .step{border-left:3px solid #d1d5db;padding:5px 9px;margin:4px 0;font-size:11.5px;background:#fafafa;border-radius:4px}
+  .step.route{border-left-color:#8b5cf6}.step.tool_call{border-left-color:#f59e0b}
+  .step.observation{border-left-color:#10b981}.step.answer{border-left-color:#2563eb}
+  .lbl{font-weight:700;font-size:10px;text-transform:uppercase;color:#666;letter-spacing:.4px}
+  code{font-family:ui-monospace,monospace;background:#eef0f2;padding:1px 5px;border-radius:3px;font-size:11.5px}
+  pre{background:#1e1e1e;color:#d4d4d4;padding:11px;border-radius:6px;font-size:11.5px;overflow-x:auto}
+  .note{background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px 14px;font-size:13.5px;margin-top:16px}
+  .ex{font-size:12.5px;color:#666;margin-top:7px}
+  .ex span{color:#2563eb;cursor:pointer;text-decoration:underline;margin-right:12px}
+</style>
+</head>
+<body>
+
+<h1>📋 TaskFlow</h1>
+<div class="sub">Same database, two front doors: structured REST calls, and an agent that speaks English.</div>
+
+<div class="cols">
+
+  <!-- ============ REST ============ -->
+  <div class="panel">
+    <h2>🔧 REST API</h2>
+    <div class="hint">Explicit calls · DTOs validate input · <a href="/docs" target="_blank">/docs</a></div>
+
+    <input id="t" placeholder="Task title...">
+    <select id="p"></select>
+    <button onclick="addTask()">POST /api/tasks</button>
+    <button class="ghost" onclick="load()">↻ GET</button>
+
+    <div id="tasks" style="margin-top:12px"></div>
+  </div>
+
+  <!-- ============ AGENT ============ -->
+  <div class="panel">
+    <h2>🤖 Agent</h2>
+    <div class="hint">LangGraph · router → (chat | agent ⇄ tools)</div>
+
+    <div id="chatlog"></div>
+    <input id="m" placeholder="Tell the agent what to do..." onkeypress="if(event.key==='Enter')send()">
+    <button onclick="send()" id="sendbtn">Send</button>
+    <button class="ghost" onclick="showGraph()">Graph</button>
+
+    <div class="ex">
+      Try:
+      <span onclick="setM('Add a task to fix the login bug')">create</span>
+      <span onclick="setM('What tasks do I have pending?')">list</span>
+      <span onclick="setM('Create a Fitness project then add a task to go running in it')">two tools</span>
+      <span onclick="setM('Add a task to my Gardening project')">error recovery</span>
+      <span onclick="setM('Hey, thanks!')">chitchat path</span>
+    </div>
+
+    <div id="graphbox"></div>
+    <div id="trace" style="margin-top:10px"></div>
+  </div>
+</div>
+
+<div class="note">
+  <b>Two things to watch.</b>
+  (1) The <code>route</code> step in the trace — "Hey, thanks!" goes down the
+  cheap <i>chat</i> branch with no tools at all, while a task request goes to
+  the <i>agent</i> branch. That's the conditional workflow.
+  (2) Ask it to add a task to a project that doesn't exist. The tool returns
+  an error, the model <i>reads it</i> and retries — that's the iterative loop
+  recovering instead of crashing.
+</div>
+
+<script>
+const setM = t => document.getElementById('m').value = t;
+
+async function load() {
+  const [tasks, projects] = await Promise.all([
+    fetch('/api/tasks').then(r => r.json()),
+    fetch('/api/projects').then(r => r.json()),
+  ]);
+
+  document.getElementById('p').innerHTML =
+    projects.map(p => `<option value="${p.id}">${esc(p.name)} (${p.task_count})</option>`).join('');
+
+  document.getElementById('tasks').innerHTML = tasks.length ? tasks.map(t => `
+    <div class="task ${t.done ? 'done' : ''}">
+      <input type="checkbox" ${t.done ? 'checked' : ''} onchange="toggle(${t.id}, this.checked)">
+      <span class="title">${esc(t.title)}</span>
+      <span class="tag" style="background:${color(t.project_color)}">${esc(t.project_name)}</span>
+      <span class="x" onclick="del(${t.id})">×</span>
+    </div>`).join('') : '<div style="color:#999;font-size:13px">No tasks yet.</div>';
+}
+
+const color = c => ({blue:'#2563eb',green:'#16a34a',grey:'#6b7280',red:'#dc2626',purple:'#7c3aed'}[c] || '#6b7280');
+
+async function addTask() {
+  const title = document.getElementById('t').value.trim();
+  const project_id = +document.getElementById('p').value;
+  if (!title) return;
+  const r = await fetch('/api/tasks', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ title, project_id }),
+  });
+  if (!r.ok) { alert('Validation failed (422) — that is the DTO doing its job'); return; }
+  document.getElementById('t').value = '';
+  load();
+}
+
+const toggle = (id, done) =>
+  fetch(`/api/tasks/${id}`, {method:'PATCH', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ done })}).then(load);
+
+const del = id => fetch(`/api/tasks/${id}`, {method:'DELETE'}).then(load);
+
+async function send() {
+  const input = document.getElementById('m');
+  const message = input.value.trim();
+  if (!message) return;
+  input.value = '';
+  addMsg('user', message);
+  const btn = document.getElementById('sendbtn');
+  btn.disabled = true; btn.textContent = '…';
+
+  const r = await fetch('/api/chat', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ message }),
+  });
+  const d = await r.json();
+  btn.disabled = false; btn.textContent = 'Send';
+
+  if (!r.ok) { addMsg('bot', '❌ ' + (d.detail || 'failed')); return; }
+
+  addMsg('bot', d.answer);
+  renderTrace(d);
+  load();   // the agent may have changed the DB — refresh the REST view
+}
+
+function addMsg(who, text) {
+  const log = document.getElementById('chatlog');
+  log.innerHTML += `<div class="msg ${who}">${esc(text)}</div>`;
+  log.scrollTop = log.scrollHeight;
+}
+
+function renderTrace(d) {
+  let html = `<div style="font-size:11.5px;color:#666;margin-bottom:5px">
+    intent: <b>${esc(d.intent)}</b> · steps: <b>${d.steps}</b></div>`;
+  for (const s of d.trace) {
+    html += `<div class="step ${s.type}"><span class="lbl">${s.type.replace('_',' ')}</span> `;
+    if (s.intent) html += `→ <code>${esc(s.intent)}</code> branch`;
+    if (s.tool)   html += `<code>${esc(s.tool)}(${esc(JSON.stringify(s.args||{}))})</code>`;
+    if (s.result) html += `<div style="color:#444;margin-top:3px">→ ${esc(s.result)}</div>`;
+    if (s.content)html += `<div style="margin-top:3px">${esc(s.content)}</div>`;
+    html += `</div>`;
+  }
+  document.getElementById('trace').innerHTML = html;
+}
+
+async function showGraph() {
+  const box = document.getElementById('graphbox');
+  if (box.innerHTML) { box.innerHTML=''; return; }
+  const d = await fetch('/api/graph').then(r => r.json());
+  box.innerHTML = `<pre>${esc(d.diagram)}</pre>`;
+}
+
+function esc(s){const d=document.createElement('div');d.textContent=s??'';return d.innerHTML}
+load();
+</script>
+</body>
+</html>

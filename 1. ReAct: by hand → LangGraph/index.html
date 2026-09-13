@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>P1 — ReAct: By Hand vs LangGraph</title>
+<style>
+  * { box-sizing: border-box; font-family: system-ui, sans-serif; }
+  body { max-width: 1100px; margin: 28px auto; padding: 0 18px; background: #f6f7f9; color: #1a1a1a; }
+  h1 { margin-bottom: 4px; }
+  .sub { color: #666; font-size: 14px; margin-bottom: 20px; }
+  .bar { background: #fff; border: 1px solid #e3e3e6; border-radius: 10px; padding: 16px; margin-bottom: 18px; }
+  input { width: 100%; padding: 11px; border: 1px solid #ccc; border-radius: 6px; font-size: 15px; }
+  button { padding: 9px 18px; background: #2563eb; color: #fff; border: 0; border-radius: 6px; cursor: pointer; font-size: 14px; margin: 10px 6px 0 0; }
+  button:hover { background: #1d4ed8; }
+  button:disabled { background: #9ca3af; cursor: not-allowed; }
+  .examples { margin-top: 10px; font-size: 13px; color: #666; }
+  .examples span { color: #2563eb; cursor: pointer; margin-right: 14px; text-decoration: underline; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .panel { background: #fff; border: 1px solid #e3e3e6; border-radius: 10px; padding: 16px; }
+  .panel h2 { margin: 0 0 2px; font-size: 16px; }
+  .panel .file { font-size: 12px; color: #888; font-family: ui-monospace, monospace; margin-bottom: 12px; }
+  .stats { display: flex; gap: 14px; font-size: 12px; color: #555; margin-bottom: 10px; }
+  .stats b { color: #2563eb; font-size: 15px; }
+  .answer { background: #f0f7ff; border-left: 3px solid #2563eb; padding: 10px 12px; border-radius: 5px; font-size: 14px; margin-bottom: 12px; }
+  .step { border-left: 3px solid #d1d5db; padding: 7px 10px; margin: 6px 0; font-size: 12.5px; background: #fafafa; border-radius: 4px; }
+  .step.tool_call { border-left-color: #f59e0b; }
+  .step.observation { border-left-color: #10b981; }
+  .step.answer { border-left-color: #2563eb; }
+  .step .lbl { font-weight: 700; font-size: 10.5px; text-transform: uppercase; letter-spacing: .4px; color: #666; }
+  code { font-family: ui-monospace, monospace; background: #eef0f2; padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+  pre { background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 6px; font-size: 12px; overflow-x: auto; }
+  .note { background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 12px 14px; font-size: 13.5px; margin-top: 18px; }
+</style>
+</head>
+<body>
+
+<h1>⚖️ ReAct: By Hand vs LangGraph</h1>
+<div class="sub">Same tools. Same question. Same result. Two completely different codebases.</div>
+
+<div class="bar">
+  <input id="q" placeholder="Ask something..." value="What's the weather in Delhi?">
+  <button onclick="runBoth()" id="btn">▶ Run Both</button>
+  <button onclick="showGraph()" style="background:#6b7280">View Graph Structure</button>
+  <div class="examples">
+    Try:
+    <span onclick="setQ('What is the weather in Mumbai?')">one tool</span>
+    <span onclick="setQ('Weather in Delhi and Bangalore — which is hotter?')">two tools</span>
+    <span onclick="setQ('If it is 34 degrees in Delhi, what is that times 3?')">chained tools</span>
+    <span onclick="setQ('Hello, who are you?')">no tools</span>
+  </div>
+  <div id="graphbox"></div>
+</div>
+
+<div class="cols">
+  <div class="panel">
+    <h2>🔧 Manual Loop</h2>
+    <div class="file">agent_manual.py — a for-loop you wrote</div>
+    <div id="manual"></div>
+  </div>
+  <div class="panel">
+    <h2>🕸️ LangGraph</h2>
+    <div class="file">agent_graph.py — a StateGraph you declared</div>
+    <div id="graph"></div>
+  </div>
+</div>
+
+<div class="note">
+  <b>What to look for:</b> the traces should be nearly identical — same tools,
+  same order, same answer. That's the point. The manual version <i>writes</i>
+  the loop; LangGraph <i>declares</i> it. Everything you gain later —
+  persistence (P3), parallel branches (P4), streaming and pause-for-human
+  (P6) — comes from the graph being a described structure instead of a
+  <code>for</code> statement.
+</div>
+
+<script>
+const setQ = t => document.getElementById('q').value = t;
+
+async function runBoth() {
+  const question = document.getElementById('q').value.trim();
+  if (!question) return;
+  const btn = document.getElementById('btn');
+  btn.disabled = true; btn.textContent = '⏳ Running...';
+  document.getElementById('manual').innerHTML = '<i>running…</i>';
+  document.getElementById('graph').innerHTML  = '<i>running…</i>';
+
+  // Fire both at once — they're independent, so there's no reason to wait
+  // for one before starting the other. (Project 4 goes deep on this.)
+  const [m, g] = await Promise.all([
+    call('/api/ask/manual', question),
+    call('/api/ask/graph',  question),
+  ]);
+  render('manual', m);
+  render('graph', g);
+  btn.disabled = false; btn.textContent = '▶ Run Both';
+}
+
+async function call(url, question) {
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ question }),
+    });
+    const data = await res.json();
+    return res.ok ? data : { error: data.detail || 'failed' };
+  } catch (e) { return { error: e.message }; }
+}
+
+function render(id, d) {
+  const el = document.getElementById(id);
+  if (d.error) { el.innerHTML = `<div class="answer" style="background:#fef2f2;border-color:#dc2626">❌ ${d.error}</div>`; return; }
+
+  let html = `<div class="stats">
+      <span>steps <b>${d.steps}</b></span>
+      <span>time <b>${d.elapsed_ms}ms</b></span>
+      ${d.budget_exceeded ? '<span style="color:#b45309">⚠️ budget hit</span>' : ''}
+    </div>
+    <div class="answer">${esc(d.answer)}</div>`;
+
+  for (const s of d.trace) {
+    const type = s.type === 'tool' ? 'tool_call' : s.type;
+    html += `<div class="step ${type}"><div class="lbl">${type.replace('_',' ')}</div>`;
+    if (s.tool)    html += `<code>${s.tool}(${s.args ? esc(JSON.stringify(s.args)) : ''})</code>`;
+    if (s.result)  html += `<div style="margin-top:4px;color:#444">→ ${esc(typeof s.result === 'string' ? s.result : JSON.stringify(s.result))}</div>`;
+    if (s.content) html += `<div style="margin-top:4px">${esc(s.content)}</div>`;
+    html += `</div>`;
+  }
+  el.innerHTML = html;
+}
+
+async function showGraph() {
+  const box = document.getElementById('graphbox');
+  if (box.innerHTML) { box.innerHTML = ''; return; }
+  const res = await fetch('/api/graph');
+  const d = await res.json();
+  box.innerHTML = `<pre>${esc(d.diagram)}</pre>
+    <div style="font-size:13px;color:#666">
+      LangGraph can draw itself, because the graph is <b>data</b>, not control flow.
+      Your <code>for</code> loop in agent_manual.py cannot do this.
+    </div>`;
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s ?? ''; return d.innerHTML; }
+</script>
+</body>
+</html>

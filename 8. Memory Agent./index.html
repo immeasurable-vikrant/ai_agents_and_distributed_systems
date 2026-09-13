@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>P8 — Memory Agent</title>
+<style>
+  *{box-sizing:border-box;font-family:system-ui,sans-serif}
+  body{max-width:1060px;margin:22px auto;padding:0 18px;background:#f6f7f9;color:#1a1a1a}
+  h1{margin-bottom:2px}.sub{color:#666;font-size:14px;margin-bottom:14px}
+  .wrap{display:grid;grid-template-columns:1fr 330px;gap:14px}
+  .panel{background:#fff;border:1px solid #e3e3e6;border-radius:10px;padding:15px;margin-bottom:14px}
+  h2{margin:0 0 3px;font-size:15px}.hint{font-size:12px;color:#888;margin-bottom:10px}
+  input,select{width:100%;padding:9px;border:1px solid #ccc;border-radius:6px;font-size:13.5px;margin-bottom:8px}
+  button{padding:8px 14px;background:#2563eb;color:#fff;border:0;border-radius:6px;cursor:pointer;font-size:13px;margin:0 5px 0 0}
+  button:hover{background:#1d4ed8}button.ghost{background:#6b7280}button.sm{padding:2px 7px;font-size:11px}
+  button.danger{background:#dc2626}
+  #log{height:270px;overflow-y:auto;border:1px solid #eee;border-radius:7px;padding:10px;margin-bottom:8px;background:#fafafa}
+  .msg{padding:8px 12px;border-radius:9px;margin:6px 0;font-size:13.5px;max-width:85%}
+  .msg.user{background:#dbeafe;margin-left:auto}.msg.bot{background:#f1f3f5}
+  .mem{border:1px solid #e5e7eb;border-left:3px solid #8b5cf6;border-radius:6px;padding:7px 9px;margin-bottom:6px;font-size:12.5px}
+  .mem .cat{font-size:9.5px;text-transform:uppercase;letter-spacing:.4px;color:#7c3aed;font-weight:700}
+  .badge{display:inline-block;padding:2px 8px;border-radius:9px;font-size:10.5px;font-weight:600;margin-right:5px}
+  .badge.stm{background:#dbeafe;color:#1e40af}.badge.ltm{background:#ede9fe;color:#5b21b6}
+  .badge.new{background:#dcfce7;color:#166534}
+  .scope{font-size:11.5px;color:#666;margin:6px 0}
+  pre{background:#1e1e1e;color:#d4d4d4;padding:10px;border-radius:6px;font-size:11px;overflow-x:auto}
+  .note{background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px 14px;font-size:13.5px}
+  .ex{font-size:12px;color:#666;margin-top:6px}
+  .ex span{color:#2563eb;cursor:pointer;text-decoration:underline;margin-right:10px}
+</style>
+</head>
+<body>
+
+<h1>🧠 Memory Agent</h1>
+<div class="sub">Two memories at once: this conversation (STM) and this person (LTM).</div>
+
+<div class="wrap">
+  <div>
+    <div class="panel">
+      <div style="display:flex;gap:9px;align-items:end">
+        <div style="flex:1">
+          <div class="hint" style="margin:0 0 3px">User (LTM scope)</div>
+          <select id="user" onchange="switchUser()">
+            <option value="alice">alice</option>
+            <option value="bob">bob</option>
+          </select>
+        </div>
+        <div style="flex:2">
+          <div class="hint" style="margin:0 0 3px">Thread (STM scope)</div>
+          <div style="font-size:12px;font-family:ui-monospace,monospace;padding:9px;border:1px solid #eee;border-radius:6px;background:#fafafa" id="tid">(new)</div>
+        </div>
+      </div>
+      <button onclick="newThread()">+ New conversation</button>
+      <button class="ghost" onclick="showGraph()">Graph</button>
+      <div id="graphbox"></div>
+    </div>
+
+    <div class="panel">
+      <h2>💬 Chat</h2>
+      <div id="log"></div>
+      <input id="m" placeholder="Say something..." onkeypress="if(event.key==='Enter')send()">
+      <button onclick="send()" id="btn">Send</button>
+      <div class="ex">
+        Try in order:
+        <span onclick="setM('I am vegetarian and I live in Gurgaon')">1. tell it facts</span>
+        <span onclick="setM('What should I cook tonight?')">2. ask something related</span>
+        <span onclick="setM('What is 2+2?')">3. saves nothing</span>
+      </div>
+      <div id="scope"></div>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <h2>🗄️ Long-term memory</h2>
+      <div class="hint">user <b id="memuser">alice</b> · survives new conversations</div>
+      <div id="mems"></div>
+      <input id="newfact" placeholder="Teach it a fact manually..." style="margin-top:8px">
+      <button class="sm" onclick="addFact()">+ Add</button>
+    </div>
+  </div>
+</div>
+
+<div class="note">
+  <b>The experiment.</b> Tell it <i>"I am vegetarian"</i>, then ask
+  <i>"what should I cook?"</i> — it uses the fact. Now click
+  <b>+ New conversation</b> and ask <i>"what should I cook?"</i> again.<br>
+  The chat log is <b>empty</b> (STM is per-thread) but it still knows
+  you're vegetarian (LTM is per-user). Switch to <b>bob</b> and it knows
+  nothing — different namespace.
+</div>
+
+<script>
+let user = 'alice', threadId = null;
+const setM = t => document.getElementById('m').value = t;
+
+function newThread() {
+  threadId = null;
+  document.getElementById('tid').textContent = '(new)';
+  document.getElementById('log').innerHTML = '';
+  document.getElementById('scope').innerHTML = '';
+}
+
+function switchUser() {
+  user = document.getElementById('user').value;
+  document.getElementById('memuser').textContent = user;
+  newThread();
+  loadMems();
+}
+
+async function send() {
+  const input = document.getElementById('m');
+  const message = input.value.trim();
+  if (!message) return;
+  input.value = '';
+  addMsg('user', message);
+  const btn = document.getElementById('btn');
+  btn.disabled = true; btn.textContent = '…';
+
+  const r = await fetch('/api/chat', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ message, user_id: user, thread_id: threadId }),
+  });
+  const d = await r.json();
+  btn.disabled = false; btn.textContent = 'Send';
+  if (!r.ok) { addMsg('bot', '❌ ' + (d.detail||'failed')); return; }
+
+  threadId = d.thread_id;
+  document.getElementById('tid').textContent = threadId;
+  addMsg('bot', d.answer);
+
+  let s = `<span class="badge stm">STM: ${d.stm_size} msgs in this thread</span>`;
+  if (d.recalled.length)
+    s += `<span class="badge ltm">LTM: recalled ${d.recalled.length}</span>`;
+  if (d.saved.length)
+    s += `<span class="badge new">+${d.saved.length} new memory</span>`;
+  if (d.recalled.length)
+    s += `<div class="scope">used: ${d.recalled.map(m=>esc(m.fact)).join(' · ')}</div>`;
+  if (d.saved.length)
+    s += `<div class="scope">learned: ${d.saved.map(m=>esc(m.fact)).join(' · ')}</div>`;
+  document.getElementById('scope').innerHTML = s;
+
+  loadMems();
+}
+
+function addMsg(who, text) {
+  const log = document.getElementById('log');
+  log.innerHTML += `<div class="msg ${who}">${esc(text)}</div>`;
+  log.scrollTop = log.scrollHeight;
+}
+
+async function loadMems() {
+  const mems = await fetch(`/api/memories/${user}`).then(r=>r.json());
+  document.getElementById('mems').innerHTML = mems.length ? mems.map(m => `
+    <div class="mem">
+      <div class="cat">${esc(m.category)}
+        <button class="sm danger" style="float:right" onclick="forget('${m.id}')">×</button>
+      </div>
+      ${esc(m.fact)}
+    </div>`).join('') : '<div style="color:#999;font-size:12px">nothing yet</div>';
+}
+
+async function addFact() {
+  const fact = document.getElementById('newfact').value.trim();
+  if (fact.length < 3) return;
+  await fetch('/api/memories', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ user_id: user, fact, category: 'manual' }),
+  });
+  document.getElementById('newfact').value = '';
+  loadMems();
+}
+
+async function forget(id) {
+  await fetch(`/api/memories/${user}/${id}`, { method:'DELETE' });
+  loadMems();
+}
+
+async function showGraph() {
+  const box = document.getElementById('graphbox');
+  if (box.innerHTML) { box.innerHTML=''; return; }
+  const d = await fetch('/api/graph').then(r=>r.json());
+  box.innerHTML = `<pre>${esc(d.diagram)}</pre>`;
+}
+
+function esc(s){const d=document.createElement('div');d.textContent=s??'';return d.innerHTML}
+loadMems();
+</script>
+</body>
+</html>

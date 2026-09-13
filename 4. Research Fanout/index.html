@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>P4 — Research Fanout</title>
+<style>
+  *{box-sizing:border-box;font-family:system-ui,sans-serif}
+  body{max-width:1080px;margin:24px auto;padding:0 18px;background:#f6f7f9;color:#1a1a1a}
+  h1{margin-bottom:2px}.sub{color:#666;font-size:14px;margin-bottom:16px}
+  .panel{background:#fff;border:1px solid #e3e3e6;border-radius:10px;padding:16px;margin-bottom:16px}
+  h2{margin:0 0 4px;font-size:16px}.hint{font-size:12px;color:#888;margin-bottom:12px}
+  input{width:100%;padding:10px;border:1px solid #ccc;border-radius:6px;font-size:14px}
+  button{padding:9px 16px;background:#2563eb;color:#fff;border:0;border-radius:6px;cursor:pointer;font-size:13px;margin:9px 6px 0 0}
+  button:hover{background:#1d4ed8}button.ghost{background:#6b7280}button:disabled{background:#9ca3af;cursor:not-allowed}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .timing{font-size:26px;font-weight:700;color:#2563eb}
+  .timing.slow{color:#dc2626}
+  .lbl{font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.4px}
+  .branch{border-left:3px solid #10b981;padding:7px 10px;margin:6px 0;font-size:12.5px;background:#fafafa;border-radius:4px}
+  .plan{border-left:3px solid #8b5cf6;padding:7px 10px;margin:6px 0;font-size:12.5px;background:#faf5ff;border-radius:4px}
+  .answer{background:#f0f7ff;border-left:3px solid #2563eb;padding:11px 13px;border-radius:5px;font-size:13.5px;margin:10px 0}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:8px}
+  td,th{text-align:left;padding:6px 8px;border-bottom:1px solid #eee}
+  th{background:#f3f4f6;font-size:11px;text-transform:uppercase;color:#666}
+  .good{color:#16a34a;font-weight:700}.bad{color:#dc2626;font-weight:700}
+  pre{background:#1e1e1e;color:#d4d4d4;padding:11px;border-radius:6px;font-size:11.5px;overflow-x:auto}
+  .note{background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px 14px;font-size:13.5px}
+  .ex{font-size:12.5px;color:#666;margin-top:7px}
+  .ex span{color:#2563eb;cursor:pointer;text-decoration:underline;margin-right:11px}
+</style>
+</head>
+<body>
+
+<h1>⚡ Research Fanout</h1>
+<div class="sub">Parallel LangGraph branches on top — the concurrency lab that explains why, below.</div>
+
+<!-- ============ RESEARCH ============ -->
+<div class="panel">
+  <h2>🔀 Parallel vs Sequential Research</h2>
+  <div class="hint">plan → fan out to N researchers → fan in → synthesize</div>
+
+  <input id="q" value="What are the main trade-offs of microservices vs a monolith?">
+  <button onclick="runBoth()" id="btn">▶ Run Both &amp; Compare</button>
+  <button class="ghost" onclick="showGraph()">Graph</button>
+  <div class="ex">
+    Try:
+    <span onclick="setQ('Compare Postgres, MongoDB and Redis for a chat app')">3-way compare</span>
+    <span onclick="setQ('What should I know before moving from frontend to backend engineering?')">open-ended</span>
+  </div>
+  <div id="graphbox"></div>
+
+  <div class="cols" style="margin-top:14px">
+    <div><div class="lbl">Parallel (fan-out)</div><div id="ptime" class="timing">—</div><div id="pout"></div></div>
+    <div><div class="lbl">Sequential (await in a loop)</div><div id="stime" class="timing slow">—</div><div id="sout"></div></div>
+  </div>
+</div>
+
+<!-- ============ LAB ============ -->
+<div class="panel">
+  <h2>🧪 Concurrency Lab</h2>
+  <div class="hint">No LLM needed — these run instantly and print real timings</div>
+
+  <button onclick="lab('1')">1. await-loop vs gather</button>
+  <button onclick="lab('2')">2. GIL: threads vs processes</button>
+  <button onclick="lab('3')">3. threads on I/O</button>
+  <button onclick="lab('4')">4. bounded concurrency</button>
+  <button onclick="lab('5')">5. blocking the loop</button>
+
+  <div id="labout"></div>
+</div>
+
+<div class="note">
+  <b>The connection.</b> Experiment 1 shows <code>await</code> in a
+  <code>for</code> loop running 8× slower than <code>gather</code>. The
+  research panel above is that exact lesson at the graph level: sequential
+  mode awaits each branch in a loop, parallel mode fans out with
+  <code>Send()</code>. Same trade, one level up.<br><br>
+  <b>And the catch:</b> fan-in waits for <i>all</i> branches, so your total
+  time is set by the <i>slowest</i> one. Three fast branches and one wedged
+  branch = one wedged response. That's why production fan-out needs
+  per-branch timeouts.
+</div>
+
+<script>
+const setQ = t => document.getElementById('q').value = t;
+
+async function runBoth() {
+  const question = document.getElementById('q').value.trim();
+  if (question.length < 10) return alert('Question too short (min 10 chars)');
+  const btn = document.getElementById('btn');
+  btn.disabled = true; btn.textContent = '⏳ Running both...';
+  ['ptime','stime'].forEach(i => document.getElementById(i).textContent = '…');
+  ['pout','sout'].forEach(i => document.getElementById(i).innerHTML = '');
+
+  // Fire both at once — they're independent requests.
+  const [p, s] = await Promise.all([
+    post('/api/research', { question, mode: 'parallel' }),
+    post('/api/research', { question, mode: 'sequential' }),
+  ]);
+
+  render('p', p);
+  render('s', s);
+  btn.disabled = false; btn.textContent = '▶ Run Both & Compare';
+}
+
+async function post(url, body) {
+  try {
+    const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const d = await r.json();
+    return r.ok ? d : { error: d.detail || 'failed' };
+  } catch (e) { return { error: e.message }; }
+}
+
+function render(prefix, d) {
+  const time = document.getElementById(prefix + 'time');
+  const out  = document.getElementById(prefix + 'out');
+  if (d.error) { time.textContent = '✕'; out.innerHTML = `<div class="answer" style="background:#fef2f2;border-color:#dc2626">${esc(d.error)}</div>`; return; }
+
+  time.textContent = (d.total_ms/1000).toFixed(1) + 's';
+  let html = '';
+  if (d.trace) {
+    for (const t of d.trace) {
+      if (t.type === 'plan')
+        html += `<div class="plan"><b>PLAN</b> — ${t.subquestions.length} branches<ul style="margin:4px 0 0 16px;padding:0">${t.subquestions.map(s=>`<li>${esc(s)}</li>`).join('')}</ul></div>`;
+      if (t.type === 'branch')
+        html += `<div class="branch"><b>${esc(t.subquestion)}</b><div style="color:#444;margin-top:3px">${esc(t.finding)}</div></div>`;
+    }
+  } else if (d.branches) {
+    html += `<div class="plan"><b>${d.branches} branches</b>, researched one after another</div>`;
+  }
+  html += `<div class="answer">${esc(d.answer)}</div>`;
+  out.innerHTML = html;
+}
+
+async function lab(n) {
+  const out = document.getElementById('labout');
+  out.innerHTML = '<div style="margin-top:10px;color:#666">⏳ running…</div>';
+  const d = await post(`/api/lab/${n}`, {});
+  if (d.error) { out.innerHTML = `<div style="color:#dc2626">${esc(d.error)}</div>`; return; }
+
+  let rows = '';
+  for (const [k, v] of Object.entries(d)) {
+    let cls = '';
+    if (k.includes('gather') || k.includes('threaded') || k.includes('nonblocking') || k.includes('processes')) cls = 'good';
+    if (k.includes('sequential') || k.includes('blocking_s')) cls = 'bad';
+    rows += `<tr><td>${esc(k)}</td><td class="${cls}">${esc(String(v))}</td></tr>`;
+  }
+  out.innerHTML = `<table><tr><th>metric</th><th>value</th></tr>${rows}</table>`;
+}
+
+async function showGraph() {
+  const box = document.getElementById('graphbox');
+  if (box.innerHTML) { box.innerHTML=''; return; }
+  const d = await fetch('/api/graph').then(r=>r.json());
+  box.innerHTML = `<pre>${esc(d.diagram)}</pre>`;
+}
+
+function esc(s){const d=document.createElement('div');d.textContent=s??'';return d.innerHTML}
+</script>
+</body>
+</html>

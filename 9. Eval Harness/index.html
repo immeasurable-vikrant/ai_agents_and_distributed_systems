@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>P9 — Eval Harness</title>
+<style>
+  *{box-sizing:border-box;font-family:system-ui,sans-serif}
+  body{max-width:1080px;margin:22px auto;padding:0 18px;background:#f6f7f9;color:#1a1a1a}
+  h1{margin-bottom:2px}.sub{color:#666;font-size:14px;margin-bottom:14px}
+  .panel{background:#fff;border:1px solid #e3e3e6;border-radius:10px;padding:15px;margin-bottom:14px}
+  h2{margin:0 0 4px;font-size:15px}.hint{font-size:12px;color:#888;margin-bottom:10px}
+  button{padding:9px 15px;background:#2563eb;color:#fff;border:0;border-radius:6px;cursor:pointer;font-size:13px;margin:0 6px 0 0}
+  button:hover{background:#1d4ed8}button.ghost{background:#6b7280}button:disabled{background:#9ca3af}
+  label{font-size:12.5px;color:#444;margin-right:12px}
+  .bar{height:9px;background:#e5e7eb;border-radius:5px;overflow:hidden;margin-top:3px}
+  .bar>div{height:100%;background:#16a34a}
+  .bar.warn>div{background:#f59e0b}.bar.bad>div{background:#dc2626}
+  .metric{margin-bottom:9px}
+  .metric .top{display:flex;justify-content:space-between;font-size:12.5px}
+  .metric .k{font-family:ui-monospace,monospace}
+  .case{border:1px solid #e5e7eb;border-radius:7px;padding:9px 11px;margin-bottom:7px;font-size:12.5px}
+  .case.fail{border-left:3px solid #dc2626;background:#fef2f2}
+  .case.pass{border-left:3px solid #16a34a}
+  .q{font-weight:600;margin-bottom:3px}
+  .a{color:#444;margin:3px 0}
+  .ev{display:inline-block;font-size:10.5px;padding:2px 7px;border-radius:9px;margin:2px 4px 0 0}
+  .ev.ok{background:#dcfce7;color:#166534}.ev.no{background:#fee2e2;color:#991b1b}
+  .traj{font-family:ui-monospace,monospace;font-size:11px;color:#666}
+  .verdict{padding:12px 14px;border-radius:8px;font-size:14px;font-weight:600;margin:10px 0}
+  .verdict.ok{background:#dcfce7;color:#166534}.verdict.bad{background:#fee2e2;color:#991b1b}
+  .reg{background:#fff;border:1px solid #fecaca;border-radius:7px;padding:9px 11px;margin:6px 0;font-size:12.5px}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .note{background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px 14px;font-size:13.5px}
+  code{background:#eef0f2;padding:1px 5px;border-radius:3px;font-size:12px;font-family:ui-monospace,monospace}
+</style>
+</head>
+<body>
+
+<h1>📊 Eval Harness</h1>
+<div class="sub">How do you know your agent works? Measure it — and catch the regression the average hides.</div>
+
+<div class="panel">
+  <div id="banner" class="hint"></div>
+  <label><input type="checkbox" id="judge"> use LLM judge (costs calls)</label>
+  <div style="margin-top:9px">
+    <button onclick="runOne('v1')">▶ Run v1</button>
+    <button onclick="runOne('v2')">▶ Run v2</button>
+    <button onclick="compare()" id="cmpbtn" style="background:#7c3aed">⚖️ Compare v1 vs v2</button>
+    <button class="ghost" onclick="showData()">Dataset</button>
+  </div>
+  <div id="databox"></div>
+</div>
+
+<div id="out"></div>
+
+<div class="note">
+  <b>Click "Compare v1 vs v2".</b> The overall score barely moves
+  (<code>-0.033</code>) — the kind of delta you'd shrug off. But one test
+  case drops <code>-0.2</code> and the build is <b>BLOCKED</b>.<br><br>
+  The cause: v2's prompt says <i>"ALWAYS use a tool"</i>, so it calls
+  <code>get_weather</code> on <i>"Hello, who are you?"</i>. The
+  <b>answer is still fine</b> — every output-based eval passes. Only the
+  <b>trajectory</b> eval catches it.<br><br>
+  That's the whole lesson: aggregate metrics hide regressions, and
+  output-only evals miss process bugs.
+</div>
+
+<script>
+(async () => {
+  const h = await fetch('/api/health').then(r=>r.json());
+  document.getElementById('banner').innerHTML = h.real_agent_available
+    ? '🟢 real agent (OPENAI_API_KEY found) — runs cost money'
+    : '⚪ ' + h.note;
+})();
+
+async function runOne(version) {
+  const out = document.getElementById('out');
+  out.innerHTML = '<div class="panel">⏳ running…</div>';
+  const d = await post('/api/run', { version, use_judge: judge() });
+  if (d.error) return out.innerHTML = `<div class="panel" style="color:#dc2626">${esc(d.error)}</div>`;
+  out.innerHTML = renderRun(d);
+}
+
+async function compare() {
+  const btn = document.getElementById('cmpbtn');
+  btn.disabled = true; btn.textContent = '⏳ running both…';
+  const out = document.getElementById('out');
+  out.innerHTML = '<div class="panel">⏳ running v1 and v2…</div>';
+
+  const d = await post('/api/compare', { use_judge: judge() });
+  btn.disabled = false; btn.textContent = '⚖️ Compare v1 vs v2';
+  if (d.error) return out.innerHTML = `<div class="panel" style="color:#dc2626">${esc(d.error)}</div>`;
+
+  const c = d.comparison;
+  let html = `<div class="panel">
+    <h2>Regression check</h2>
+    <div class="hint">per-case comparison — not just the average</div>
+    <div style="font-size:13px;margin:8px 0">
+      v1 mean <b>${c.baseline_mean}</b> → v2 mean <b>${c.candidate_mean}</b>
+      &nbsp;(<b style="color:${c.overall_delta<0?'#dc2626':'#16a34a'}">${c.overall_delta>0?'+':''}${c.overall_delta}</b>)
+    </div>
+    <div class="verdict ${c.regressions.length?'bad':'ok'}">${esc(c.verdict)}</div>`;
+
+  for (const r of c.regressions)
+    html += `<div class="reg">⚠️ <b>${esc(r.id)}</b> — ${r.before} → ${r.after}
+      <b style="color:#dc2626">(${r.delta})</b><div style="color:#666">${esc(r.question)}</div></div>`;
+  for (const i of c.improvements)
+    html += `<div class="reg" style="border-color:#bbf7d0">✓ <b>${esc(i.id)}</b> — ${i.before} → ${i.after} (+${i.delta})</div>`;
+  html += `</div><div class="cols">${renderRun(d.v1)}${renderRun(d.v2)}</div>`;
+  out.innerHTML = html;
+}
+
+function renderRun(d) {
+  let html = `<div class="panel"><h2>${esc(d.version)}</h2>
+    <div class="hint">${esc(d.mode)} · ${d.elapsed_s}s · judge: ${d.judge?'on':'off'}</div>`;
+
+  for (const [k, s] of Object.entries(d.summary)) {
+    const cls = s.mean >= 0.999 ? '' : s.mean >= 0.7 ? 'warn' : 'bad';
+    html += `<div class="metric">
+      <div class="top"><span class="k">${esc(k)}</span><span>${s.mean} · ${s.passed}/${s.total}</span></div>
+      <div class="bar ${cls}"><div style="width:${s.mean*100}%"></div></div></div>`;
+  }
+
+  html += `<div style="margin-top:12px">`;
+  for (const r of d.results) {
+    const failed = r.evals.filter(e => e.score < 0.999);
+    html += `<div class="case ${failed.length?'fail':'pass'}">
+      <div class="q">${esc(r.id)}</div>
+      <div class="a">${esc(r.answer)}</div>
+      <div class="traj">tools: [${r.tools_used.map(esc).join(', ')}] · expected: [${r.expected_tools.map(esc).join(', ')}]</div>
+      <div>${r.evals.map(e=>`<span class="ev ${e.score>=0.999?'ok':'no'}" title="${esc(e.comment)}">${esc(e.key)}</span>`).join('')}</div>
+    </div>`;
+  }
+  return html + `</div></div>`;
+}
+
+async function showData() {
+  const box = document.getElementById('databox');
+  if (box.innerHTML) { box.innerHTML=''; return; }
+  const d = await fetch('/api/dataset').then(r=>r.json());
+  box.innerHTML = `<div style="margin-top:11px">` + d.cases.map(c => `
+    <div class="case"><div class="q">${esc(c.id)}</div>
+      <div class="a">${esc(c.question)}</div>
+      <div class="traj">expected: "${esc(c.expected)}" · tools: [${c.expected_tools.map(esc).join(', ')}]</div>
+      <div style="font-size:11.5px;color:#888;margin-top:3px">${esc(c.note)}</div>
+    </div>`).join('') +
+    `<div class="case"><div class="q">prompt v1</div><div class="a">${esc(d.prompts.v1)}</div></div>
+     <div class="case"><div class="q">prompt v2</div><div class="a">${esc(d.prompts.v2)}</div></div></div>`;
+}
+
+const judge = () => document.getElementById('judge').checked;
+
+async function post(url, body) {
+  try {
+    const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const d = await r.json();
+    return r.ok ? d : { error: d.detail || 'failed' };
+  } catch (e) { return { error: e.message }; }
+}
+
+function esc(s){const d=document.createElement('div');d.textContent=s??'';return d.innerHTML}
+</script>
+</body>
+</html>
