@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>JobRadar</title>
+<style>
+  *{box-sizing:border-box;font-family:system-ui,sans-serif}
+  body{max-width:1120px;margin:20px auto;padding:0 16px;background:#f6f7f9;color:#1a1a1a}
+  h1{margin-bottom:2px}.sub{color:#666;font-size:14px;margin-bottom:14px}
+  .panel{background:#fff;border:1px solid #e3e3e6;border-radius:10px;padding:14px;margin-bottom:13px}
+  h2{margin:0 0 4px;font-size:15px}.hint{font-size:12px;color:#888;margin-bottom:9px}
+  input,select,textarea{width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px;margin-bottom:7px}
+  textarea{min-height:90px;font-family:ui-monospace,monospace;font-size:12px}
+  button{padding:8px 14px;background:#2563eb;color:#fff;border:0;border-radius:6px;cursor:pointer;font-size:13px;margin:0 5px 0 0}
+  button:hover{background:#1d4ed8}button.ghost{background:#6b7280}button.ok{background:#16a34a}
+  button.no{background:#dc2626}button.sm{padding:4px 10px;font-size:11.5px}
+  button:disabled{background:#9ca3af}
+  .stats{display:flex;gap:11px;flex-wrap:wrap}
+  .stat{background:#f3f4f6;border-radius:7px;padding:8px 13px;text-align:center;min-width:76px}
+  .stat b{display:block;font-size:19px;color:#2563eb}
+  .stat span{font-size:10.5px;color:#666}
+  .filters{display:flex;gap:8px;flex-wrap:wrap;align-items:end}
+  .filters>div{flex:1;min-width:120px}
+  label{font-size:11.5px;font-weight:600;color:#444}
+  .job{border:1px solid #e3e3e6;border-left-width:5px;border-radius:9px;padding:12px;margin-bottom:9px;background:#fff}
+  .job.GREEN{border-left-color:#16a34a}
+  .job.YELLOW_HIGH{border-left-color:#eab308}
+  .job.YELLOW_UNCONFIRMED{border-left-color:#f59e0b}
+  .job.RED{border-left-color:#dc2626;opacity:.62}
+  .job.UNKNOWN{border-left-color:#d1d5db}
+  .head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+  .t{font-weight:700;font-size:14.5px}
+  .c{color:#555;font-size:13px}
+  .fit{font-size:21px;font-weight:700;text-align:right}
+  .badges{display:flex;flex-wrap:wrap;gap:5px;margin:7px 0}
+  .b{padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:600;color:#fff}
+  .b.out{background:#fff;color:#444;border:1px solid #ccc}
+  .pay{font-size:13px;margin:5px 0}
+  .warn{background:#fffbeb;border:1px solid #fde68a;border-radius:5px;padding:6px 9px;font-size:11.5px;margin:5px 0;color:#92400e}
+  .ev{font-size:11.5px;background:#f3f4f6;padding:5px 9px;border-radius:4px;font-style:italic;margin:5px 0}
+  pre{background:#f9fafb;padding:9px;border-radius:5px;font-size:11.5px;white-space:pre-wrap;max-height:240px;overflow-y:auto}
+  .tabs{display:flex;gap:7px;margin-bottom:13px}
+  .tab{padding:7px 15px;background:#e5e7eb;border:0;border-radius:6px;cursor:pointer;font-size:13px}
+  .tab.on{background:#2563eb;color:#fff}
+</style>
+</head>
+<body>
+
+<h1>🎯 JobRadar</h1>
+<div class="sub">Jobs come to you. Multi-agent pipeline over an event bus. Target: <b>₹40L+ base</b> · floor ₹35L</div>
+
+<div class="tabs">
+  <button class="tab on" onclick="tab('feed')">Feed</button>
+  <button class="tab" onclick="tab('paste')">Paste a job</button>
+  <button class="tab" onclick="tab('resume')">Master resume</button>
+</div>
+
+<div id="t-feed">
+  <div class="panel">
+    <div class="stats" id="stats"></div>
+    <div class="hint" id="bus" style="margin-top:9px"></div>
+    <button onclick="ingest()" id="ibtn">⟳ Pull new jobs</button>
+    <button class="ghost" onclick="load()">↻ Refresh</button>
+    <span id="istatus" style="font-size:12.5px;color:#666;margin-left:8px"></span>
+  </div>
+
+  <div class="panel">
+    <div class="filters">
+      <div><label>Band</label><select id="f-band"><option value="">All</option>
+        <option value="GREEN">🟢 Green (base ≥40L)</option>
+        <option value="YELLOW_HIGH">🟡 35-40L</option>
+        <option value="YELLOW_UNCONFIRMED">🟡 Base unconfirmed</option>
+        <option value="RED">🔴 Below floor</option></select></div>
+      <div><label>Relocation</label><select id="f-rel"><option value="">All</option>
+        <option value="VISA_SPONSORSHIP">🌟 Sponsorship</option>
+        <option value="GLOBAL_REMOTE">🌍 Global remote</option>
+        <option value="REGION_REMOTE">🇪🇺 Region remote</option>
+        <option value="INDIA_REMOTE">🇮🇳 India remote</option></select></div>
+      <div><label>Tier</label><select id="f-tier"><option value="">All</option>
+        <option>FAANG</option><option>TOP_TECH</option>
+        <option>HIGH_PAY_INDIA</option><option>YC</option></select></div>
+      <div><label>Min fit</label><input type="number" id="f-fit" value="0"></div>
+      <div style="flex:0"><label><input type="checkbox" id="f-red" checked> show red</label></div>
+      <div style="flex:0"><button onclick="load()">Filter</button></div>
+    </div>
+  </div>
+
+  <div id="jobs"></div>
+</div>
+
+<div id="t-paste" style="display:none">
+  <div class="panel">
+    <h2>Paste a job from LinkedIn / Wellfound</h2>
+    <div class="hint">You browse; the agents still classify, score, research comp and band it</div>
+    <input id="p-company" placeholder="Company"><input id="p-title" placeholder="Title">
+    <input id="p-loc" placeholder="Location (e.g. Remote - Europe)">
+    <input id="p-url" placeholder="Apply URL">
+    <textarea id="p-desc" placeholder="Paste the full job description..."></textarea>
+    <button onclick="paste()">Queue for enrichment</button>
+    <span id="pstatus" style="font-size:12.5px"></span>
+  </div>
+</div>
+
+<div id="t-resume" style="display:none">
+  <div class="panel">
+    <h2>Master resume</h2>
+    <div class="hint">Layer 1 — never modified. Tailoring happens per <b>approved</b> job, not per discovered job.</div>
+    <pre id="resume" style="max-height:520px"></pre>
+  </div>
+</div>
+
+<script>
+const BANDS = {
+  GREEN:{t:'🟢 Base ≥40L',c:'#16a34a'}, YELLOW_HIGH:{t:'🟡 35-40L',c:'#eab308'},
+  YELLOW_UNCONFIRMED:{t:'🟡 Base unconfirmed',c:'#f59e0b'},
+  RED:{t:'🔴 Below floor',c:'#dc2626'}, UNKNOWN:{t:'⚪ No data',c:'#9ca3af'},
+};
+const RELOC = {VISA_SPONSORSHIP:'🌟 Sponsorship', GLOBAL_REMOTE:'🌍 Global remote',
+  REGION_REMOTE:'🇪🇺 Region remote', INDIA_REMOTE:'🇮🇳 India remote',
+  ONSITE_ONLY:'🏢 Onsite', BLOCKED:'❌ Blocked', unknown:'❔'};
+const TIERC = {FAANG:'#7c3aed',TOP_TECH:'#2563eb',HIGH_PAY_INDIA:'#16a34a',YC:'#ea580c',STARTUP:'#6b7280'};
+
+function tab(n){
+  ['feed','paste','resume'].forEach((t,i)=>{
+    document.getElementById('t-'+t).style.display = t===n?'block':'none';
+    document.querySelectorAll('.tab')[i].classList.toggle('on', t===n);
+  });
+  if(n==='resume') fetch('/api/resume').then(r=>r.json())
+    .then(d=>document.getElementById('resume').textContent=d.master_resume);
+}
+
+async function loadStats(){
+  const m = await fetch('/api/metrics').then(r=>r.json());
+  const c = m.counters;
+  document.getElementById('stats').innerHTML = `
+    <div class="stat"><b>${c.discovered}</b><span>discovered</span></div>
+    <div class="stat"><b>${c.classified}</b><span>classified</span></div>
+    <div class="stat"><b>${c.enriched}</b><span>enriched</span></div>
+    <div class="stat"><b style="color:#16a34a">${c.green}</b><span>🟢 ≥40L base</span></div>
+    <div class="stat"><b style="color:#7c3aed">${c.sponsorship}</b><span>🌟 sponsorship</span></div>
+    <div class="stat"><b style="color:#6b7280">${c.skipped_low_fit}</b><span>skipped (low fit)</span></div>`;
+  const q = m.bus.queues ? Object.entries(m.bus.queues).map(([k,v])=>`${k}=${v}`).join(' · ') : m.bus.note;
+  document.getElementById('bus').textContent = `event bus: ${m.bus.backend} · queue depth: ${q}`;
+}
+
+async function load(){
+  const p = new URLSearchParams();
+  const g = id => document.getElementById(id).value;
+  if(g('f-band')) p.set('band', g('f-band'));
+  if(g('f-rel')) p.set('relocation', g('f-rel'));
+  if(g('f-tier')) p.set('tier', g('f-tier'));
+  if(g('f-fit')) p.set('min_fit', g('f-fit'));
+  p.set('include_red', document.getElementById('f-red').checked);
+
+  const jobs = await fetch('/api/jobs?'+p).then(r=>r.json());
+  document.getElementById('jobs').innerHTML = jobs.length ? jobs.map(render).join('')
+    : '<div class="panel" style="color:#999">No jobs yet — hit "Pull new jobs", then wait a moment for the agents to enrich them.</div>';
+  loadStats();
+}
+
+function render(j){
+  const band = BANDS[j.band] || BANDS.UNKNOWN;
+  const pay = j.base_lpa ? `<b>₹${j.base_lpa}L base</b>${j.total_lpa?` · ₹${j.total_lpa}L total`:''}
+      <span style="font-size:11px;color:#666">(${j.base_confidence} confidence)</span>`
+    : j.total_lpa ? `₹${j.total_lpa}L total <span style="font-size:11px;color:#666">(base unknown)</span>`
+    : '<span style="color:#999;font-size:12px">no comp data</span>';
+  const tz = j.tz_overlap>=7?'excellent':j.tz_overlap>=4?'good':j.tz_overlap>=2?'tough':'night shift';
+
+  return `<div class="job ${j.band}">
+    <div class="head">
+      <div><div class="t">${esc(j.title)}</div>
+        <div class="c">${esc(j.company)} · <span style="font-size:11.5px;color:#888">${esc(j.location||'—')} · via ${esc(j.source)}</span></div></div>
+      <div><div class="fit" style="color:${j.fit_score>=80?'#16a34a':j.fit_score>=60?'#eab308':'#dc2626'}">${j.fit_score}</div>
+        <div style="font-size:10px;color:#666;text-align:right">fit</div></div>
+    </div>
+    <div class="badges">
+      <span class="b" style="background:${band.c}">${band.t}</span>
+      <span class="b" style="background:${TIERC[j.company_tier]||'#6b7280'}">${esc(j.company_tier)}</span>
+      <span class="b out">${RELOC[j.relocation_tier]||esc(j.relocation_tier)}</span>
+      <span class="b out">${esc(j.employment_type)}</span>
+      <span class="b out">⏰ ${j.tz_overlap}h (${tz})</span>
+      <span class="b out">📄 ${esc(j.archetype)}</span>
+    </div>
+    <div class="pay">💰 ${pay}</div>
+    ${j.salary_note?`<div class="warn">${esc(j.salary_note)}</div>`:''}
+    ${j.fit_reason?`<div style="font-size:12px;color:#555">${esc(j.fit_reason)}</div>`:''}
+    ${j.visa_evidence?`<div class="ev">"${esc(j.visa_evidence)}"</div>`:''}
+    <div style="margin-top:8px">
+      ${j.status==='package_ready'
+        ? `<a href="${esc(j.apply_url)}" target="_blank"><button class="ok sm">📄 Package ready → Apply</button></a>
+           <button class="ghost sm" onclick="pkg(${j.id})">View resume</button>
+           <button class="ghost sm" onclick="mark(${j.id},'applied')">Mark applied</button>`
+        : `<button class="ok sm" onclick="approve(${j.id})">✓ Approve → tailor resume</button>
+           <button class="no sm" onclick="mark(${j.id},'rejected')">✕ Not interested</button>
+           <a href="${esc(j.apply_url)}" target="_blank"><button class="ghost sm">View posting</button></a>`}
+    </div>
+    <div id="pkg-${j.id}"></div></div>`;
+}
+
+async function ingest(){
+  const b=document.getElementById('ibtn'); b.disabled=true; b.textContent='⏳ pulling…';
+  document.getElementById('istatus').textContent='fetching all sources…';
+  const d = await fetch('/api/ingest',{method:'POST'}).then(r=>r.json());
+  b.disabled=false; b.textContent='⟳ Pull new jobs';
+  document.getElementById('istatus').textContent =
+    `fetched ${d.fetched}, inserted ${d.inserted}, deduped ${d.duplicates} — agents are enriching…`;
+  load(); setTimeout(load, 6000); setTimeout(load, 20000);
+}
+
+async function approve(id){
+  document.getElementById('pkg-'+id).innerHTML='<div style="font-size:12px;color:#666;margin-top:6px">tailoring resume…</div>';
+  const r = await fetch(`/api/jobs/${id}/approve`,{method:'POST'});
+  const d = await r.json();
+  if(!r.ok){document.getElementById('pkg-'+id).innerHTML=`<div class="warn">${esc(d.detail)}</div>`;return;}
+  load();
+}
+const mark = (id,v)=>fetch(`/api/jobs/${id}/status?value=${v}`,{method:'POST'}).then(load);
+
+async function pkg(id){
+  const j = await fetch('/api/jobs/'+id).then(r=>r.json());
+  document.getElementById('pkg-'+id).innerHTML = `
+    <div style="margin-top:9px"><b style="font-size:12px">What changed:</b><pre>${esc(j.changes_summary)}</pre>
+    <b style="font-size:12px">Tailored resume:</b><pre>${esc(j.tailored_resume)}</pre>
+    <b style="font-size:12px">Cover letter:</b><pre>${esc(j.cover_letter)}</pre></div>`;
+}
+
+async function paste(){
+  const g=id=>document.getElementById(id).value;
+  document.getElementById('pstatus').textContent='queuing…';
+  const r = await fetch('/api/paste',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({company:g('p-company'),title:g('p-title'),location:g('p-loc'),
+      apply_url:g('p-url'),description:g('p-desc')})});
+  const d = await r.json();
+  document.getElementById('pstatus').textContent = r.ok
+    ? '✓ queued — check the feed in a few seconds' : '✕ '+(d.detail||'failed');
+}
+
+function esc(s){const d=document.createElement('div');d.textContent=s??'';return d.innerHTML}
+load();
+</script>
+</body>
+</html>

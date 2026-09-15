@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>P10 — Planner Agent</title>
+<style>
+  *{box-sizing:border-box;font-family:system-ui,sans-serif}
+  body{max-width:1080px;margin:22px auto;padding:0 18px;background:#f6f7f9;color:#1a1a1a}
+  h1{margin-bottom:2px}.sub{color:#666;font-size:14px;margin-bottom:14px}
+  .panel{background:#fff;border:1px solid #e3e3e6;border-radius:10px;padding:15px;margin-bottom:14px}
+  h2{margin:0 0 4px;font-size:15px}.hint{font-size:12px;color:#888;margin-bottom:10px}
+  input{width:100%;padding:10px;border:1px solid #ccc;border-radius:6px;font-size:14px}
+  button{padding:9px 16px;background:#2563eb;color:#fff;border:0;border-radius:6px;cursor:pointer;font-size:13px;margin:9px 6px 0 0}
+  button:hover{background:#1d4ed8}button.ghost{background:#6b7280}button:disabled{background:#9ca3af}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .stat{display:inline-block;margin-right:14px;font-size:12px;color:#666}
+  .stat b{font-size:18px;color:#2563eb;display:block}
+  .step{border:1px solid #e5e7eb;border-radius:7px;padding:8px 10px;margin-bottom:6px;font-size:12.5px}
+  .step.done{border-left:3px solid #16a34a;background:#f0fdf4}
+  .step.failed{border-left:3px solid #dc2626;background:#fef2f2}
+  .step.pending{border-left:3px solid #d1d5db}
+  .step .t{font-family:ui-monospace,monospace;font-size:11.5px;color:#555}
+  .dep{font-size:10px;color:#7c3aed;margin-left:5px}
+  .log{font-family:ui-monospace,monospace;font-size:11px;padding:3px 7px;margin:2px 0;background:#fafafa;border-left:2px solid #d1d5db;border-radius:3px}
+  .log.replan{border-left-color:#f59e0b;background:#fffbeb}
+  .log.par{border-left-color:#8b5cf6;background:#faf5ff}
+  .ans{background:#f0f7ff;border-left:3px solid #2563eb;padding:10px 12px;border-radius:5px;font-size:13px;margin-top:9px}
+  .tag{display:inline-block;font-size:10px;padding:2px 7px;border-radius:9px;margin-left:5px}
+  .tag.plan{background:#dbeafe;color:#1e40af}.tag.react{background:#fef3c7;color:#92400e}
+  pre{background:#1e1e1e;color:#d4d4d4;padding:10px;border-radius:6px;font-size:11px;overflow-x:auto}
+  .note{background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px 14px;font-size:13.5px}
+  .ex{font-size:12px;color:#666;margin-top:6px}
+  .ex span{color:#2563eb;cursor:pointer;text-decoration:underline;margin-right:10px}
+  code{background:#eef0f2;padding:1px 5px;border-radius:3px;font-size:11.5px;font-family:ui-monospace,monospace}
+</style>
+</head>
+<body>
+
+<h1>🗺️ Planner Agent</h1>
+<div class="sub">Decompose → execute (in parallel) → replan when reality disagrees. Compared against ReAct.</div>
+
+<div class="panel">
+  <input id="goal" value="What is our ARR and how does churn compare to it?">
+  <button onclick="runBoth()" id="btn">▶ Run both architectures</button>
+  <button class="ghost" onclick="showGraph()">Graph &amp; tools</button>
+  <div class="ex">
+    Try:
+    <span onclick="setG('What is our ARR and how does churn compare to it?')">forces a replan (no ARR metric)</span>
+    <span onclick="setG('Get our revenue and headcount, then compute revenue per employee')">dependent steps</span>
+    <span onclick="setG('Look up our revenue, churn, and runway')">3 independent steps → parallel</span>
+  </div>
+  <div id="graphbox"></div>
+</div>
+
+<div class="cols">
+  <div class="panel">
+    <h2>🗺️ Plan-and-Execute <span class="tag plan">planner</span></h2>
+    <div class="hint">plans up front · runs independent steps in parallel · replans on failure</div>
+    <div id="plannerOut"></div>
+  </div>
+  <div class="panel">
+    <h2>🔁 ReAct <span class="tag react">baseline</span></h2>
+    <div class="hint">one LLM call per step · no plan · strictly sequential</div>
+    <div id="reactOut"></div>
+  </div>
+</div>
+
+<div class="note">
+  <b>What to watch.</b> Ask for <i>ARR</i> — there's no such metric, so the
+  tool returns a readable error.<br><br>
+  <b>The planner</b> shows you its whole plan before running anything, then
+  batches independent steps in <b>parallel</b>, then <b>replans</b> around
+  the failure — keeping the steps that already succeeded.<br>
+  <b>ReAct</b> has no plan to show. It discovers the failure one step at a
+  time and re-decides implicitly, one LLM call per turn.<br><br>
+  <b>Neither wins outright.</b> ReAct is simpler and adapts without
+  ceremony. Planning costs a planning call and buys you visibility,
+  parallelism, and a plan a human could approve <i>before</i> anything runs.
+</div>
+
+<script>
+const setG = t => document.getElementById('goal').value = t;
+
+async function runBoth() {
+  const goal = document.getElementById('goal').value.trim();
+  if (goal.length < 10) return alert('Goal too short');
+  const btn = document.getElementById('btn');
+  btn.disabled = true; btn.textContent = '⏳ running both…';
+  document.getElementById('plannerOut').innerHTML = '<div class="hint">running…</div>';
+  document.getElementById('reactOut').innerHTML = '<div class="hint">running…</div>';
+
+  const [p, r] = await Promise.all([
+    post('/api/run', { goal, mode: 'planner' }),
+    post('/api/run', { goal, mode: 'react' }),
+  ]);
+  document.getElementById('plannerOut').innerHTML = renderPlanner(p);
+  document.getElementById('reactOut').innerHTML = renderReact(r);
+  btn.disabled = false; btn.textContent = '▶ Run both architectures';
+}
+
+function renderPlanner(d) {
+  if (d.error) return `<div class="ans" style="background:#fef2f2;border-color:#dc2626">${esc(d.error)}</div>`;
+  let html = `<div style="margin-bottom:10px">
+    <span class="stat"><b>${d.replans}</b>replans</span>
+    <span class="stat"><b>${d.elapsed_ms}</b>ms</span></div>`;
+
+  // latest plan snapshot
+  const plans = d.trace.filter(t => t.plan);
+  if (plans.length) {
+    const last = plans[plans.length - 1].plan;
+    html += `<div style="font-size:11px;color:#666;margin-bottom:5px">FINAL PLAN</div>`;
+    for (const s of last) {
+      html += `<div class="step ${s.status}">
+        <b>${s.id}.</b> ${esc(s.description)}
+        ${s.depends_on && s.depends_on.length ? `<span class="dep">after ${s.depends_on.join(',')}</span>` : ''}
+        <div class="t">${esc(s.tool)}('${esc(s.arg)}')</div></div>`;
+    }
+  }
+
+  html += `<div style="font-size:11px;color:#666;margin:9px 0 4px">EXECUTION LOG</div>`;
+  for (const t of d.trace)
+    for (const l of (t.log || [])) {
+      const cls = l.includes('REPLAN') ? 'replan' : l.includes('parallel') ? 'par' : '';
+      html += `<div class="log ${cls}">${esc(l)}</div>`;
+    }
+
+  return html + `<div class="ans">${esc(d.answer)}</div>`;
+}
+
+function renderReact(d) {
+  if (d.error) return `<div class="ans" style="background:#fef2f2;border-color:#dc2626">${esc(d.error)}</div>`;
+  let html = `<div style="margin-bottom:10px">
+    <span class="stat"><b>${d.llm_calls}</b>llm calls</span>
+    <span class="stat"><b>—</b>no plan</span>
+    <span class="stat"><b>${d.elapsed_ms}</b>ms</span></div>
+    <div style="font-size:11px;color:#666;margin-bottom:4px">STEP-BY-STEP (sequential)</div>`;
+  for (const t of d.trace)
+    for (const l of (t.log || []))
+      html += `<div class="log">${esc(l)}</div>`;
+  return html + `<div class="ans">${esc(d.answer)}</div>`;
+}
+
+async function showGraph() {
+  const box = document.getElementById('graphbox');
+  if (box.innerHTML) { box.innerHTML=''; return; }
+  const d = await fetch('/api/graph').then(r=>r.json());
+  box.innerHTML = `<div style="margin-top:10px"><pre>${esc(d.diagram)}</pre>
+    <div style="font-size:12px;color:#666"><b>Tools (shared by both agents):</b>
+    <pre style="background:#f3f4f6;color:#333">${esc(d.tools)}</pre></div></div>`;
+}
+
+async function post(url, body) {
+  try {
+    const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const d = await r.json();
+    return r.ok ? d : { error: d.detail || 'failed' };
+  } catch (e) { return { error: e.message }; }
+}
+
+function esc(s){const d=document.createElement('div');d.textContent=s??'';return d.innerHTML}
+</script>
+</body>
+</html>

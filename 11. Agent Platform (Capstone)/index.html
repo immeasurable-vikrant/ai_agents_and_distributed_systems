@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>P11 — Agent Platform</title>
+<style>
+  *{box-sizing:border-box;font-family:system-ui,sans-serif}
+  body{max-width:1000px;margin:22px auto;padding:0 18px;background:#f6f7f9;color:#1a1a1a}
+  h1{margin-bottom:2px}.sub{color:#666;font-size:14px;margin-bottom:14px}
+  .panel{background:#fff;border:1px solid #e3e3e6;border-radius:10px;padding:15px;margin-bottom:14px}
+  h2{margin:0 0 4px;font-size:15px}.hint{font-size:12px;color:#888;margin-bottom:10px}
+  input{width:100%;padding:9px;border:1px solid #ccc;border-radius:6px;font-size:13.5px;margin-bottom:8px}
+  button{padding:8px 15px;background:#2563eb;color:#fff;border:0;border-radius:6px;cursor:pointer;font-size:13px;margin:0 6px 0 0}
+  button:hover{background:#1d4ed8}button.ghost{background:#6b7280}button:disabled{background:#9ca3af}
+  .topo{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px}
+  .svc{border:2px solid #e5e7eb;border-radius:8px;padding:10px;text-align:center;font-size:12.5px}
+  .svc.ok{border-color:#16a34a;background:#f0fdf4}
+  .svc.down{border-color:#dc2626;background:#fef2f2}
+  .svc .port{font-family:ui-monospace,monospace;font-size:11px;color:#666}
+  .svc .db{font-size:10px;color:#7c3aed;margin-top:3px}
+  .who{padding:8px 11px;border-radius:7px;font-size:13px;margin-bottom:10px;background:#dbeafe;color:#1e3a8a}
+  .who.none{background:#f3f4f6;color:#666}
+  .spec{display:inline-block;font-size:10.5px;padding:2px 8px;border-radius:9px;margin-right:5px;font-weight:600}
+  .spec.researcher{background:#dbeafe;color:#1e40af}
+  .spec.analyst{background:#fef3c7;color:#92400e}
+  .spec.writer{background:#dcfce7;color:#166534}
+  .finding{border-left:3px solid #d1d5db;padding:7px 10px;margin:6px 0;font-size:12.5px;background:#fafafa;border-radius:4px}
+  .ans{background:#f0f7ff;border-left:3px solid #2563eb;padding:10px 12px;border-radius:5px;font-size:13px;margin:9px 0}
+  .trace{font-family:ui-monospace,monospace;font-size:11px;color:#666}
+  .job{border:1px solid #eee;border-radius:6px;padding:7px 9px;margin-bottom:5px;font-size:12px}
+  .note{background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px 14px;font-size:13.5px}
+  code{background:#eef0f2;padding:1px 5px;border-radius:3px;font-size:11.5px;font-family:ui-monospace,monospace}
+  .ex{font-size:12px;color:#666;margin-top:6px}
+  .ex span{color:#2563eb;cursor:pointer;text-decoration:underline;margin-right:10px}
+</style>
+</head>
+<body>
+
+<h1>🏗️ Agent Platform</h1>
+<div class="sub">Three services, two databases, one gateway. Plus MCP so anything can call your agents.</div>
+
+<div class="panel">
+  <h2>Topology</h2>
+  <div class="hint">live health — stop a service and refresh to watch it change</div>
+  <div class="topo" id="topo"></div>
+  <button class="ghost" onclick="checkHealth()">↻ Refresh health</button>
+</div>
+
+<div class="panel">
+  <h2>Login</h2>
+  <div id="whoami" class="who none">not logged in</div>
+  <button onclick="login('alice@acme.com')">Alice (Acme, admin)</button>
+  <button onclick="login('bob@globex.com')">Bob (Globex, member)</button>
+  <button class="ghost" onclick="logout()">Logout</button>
+  <div class="hint" id="tokhint" style="margin-top:8px"></div>
+</div>
+
+<div class="panel">
+  <h2>🤖 Ask the supervisor</h2>
+  <div class="hint">a supervisor routes your question to only the specialists it needs</div>
+  <input id="q" value="Should we migrate our monolith to microservices?">
+  <button onclick="ask()" id="btn">▶ Ask</button>
+  <div class="ex">
+    Try:
+    <span onclick="setQ('What is the capital of France?')">1 specialist</span>
+    <span onclick="setQ('Should we migrate our monolith to microservices?')">2-3 specialists</span>
+  </div>
+  <div id="out"></div>
+</div>
+
+<div class="panel">
+  <h2>📋 Recent jobs <span style="font-size:11px;color:#888">(org-scoped)</span></h2>
+  <div id="jobs"></div>
+</div>
+
+<div class="note">
+  <b>Three things to try.</b><br>
+  <b>1.</b> Stop the auth service (<code>Ctrl-C</code> on :8001) and ask a
+  question anyway. With <code>VERIFY_MODE=local</code> it still works — the
+  agent service cached the public key. Switch to
+  <code>VERIFY_MODE=remote</code> and the same action returns 503.<br>
+  <b>2.</b> Log in as Alice, then Bob. Each sees only their own org's jobs —
+  even though the gateway happily forwarded both requests.<br>
+  <b>3.</b> Hit <code>localhost:8002/jobs</code> directly, bypassing the
+  gateway. You still get a 401 — because the service authenticates itself.
+  <b>The gateway is a convenience layer, not the security boundary.</b>
+</div>
+
+<script>
+let token = null;
+const setQ = t => document.getElementById('q').value = t;
+
+async function checkHealth() {
+  const h = await fetch('/api/health').then(r=>r.json()).catch(()=>({gateway:'unreachable'}));
+  const svcs = [
+    {k:'gateway', port:'8000', db:'—', role:'routing · rate limit · tracing'},
+    {k:'auth',    port:'8001', db:'auth.db',  role:'RS256 signing'},
+    {k:'agent',   port:'8002', db:'agent.db', role:'supervisor + specialists'},
+  ];
+  document.getElementById('topo').innerHTML = svcs.map(s => {
+    const st = h[s.k] || 'unknown';
+    return `<div class="svc ${st==='ok'?'ok':'down'}">
+      <b>${s.k}</b><div class="port">:${s.port}</div>
+      <div style="font-size:11px;color:#555;margin-top:3px">${s.role}</div>
+      <div class="db">db: ${s.db}</div>
+      <div style="font-size:11px;margin-top:4px">${st==='ok'?'🟢 ok':'🔴 '+st}</div>
+    </div>`;
+  }).join('');
+}
+
+async function login(email) {
+  const r = await fetch('/api/login', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ email, password:'password123' }),
+  });
+  if (!r.ok) return alert('login failed — is the auth service running?');
+  const d = await r.json();
+  token = d.token;
+  const w = document.getElementById('whoami');
+  w.className = 'who';
+  w.innerHTML = `<b>${esc(d.email)}</b> · org ${d.org_id} · role ${esc(d.role)}`;
+  document.getElementById('tokhint').innerHTML =
+    `RS256 JWT · for MCP: <code>export MCP_TOKEN=${esc(token.slice(0,22))}…</code>`;
+  loadJobs();
+}
+
+function logout() {
+  token = null;
+  const w = document.getElementById('whoami');
+  w.className = 'who none'; w.textContent = 'not logged in';
+  document.getElementById('jobs').innerHTML = '';
+  document.getElementById('out').innerHTML = '';
+  document.getElementById('tokhint').innerHTML = '';
+}
+
+const auth = () => token
+  ? {'Content-Type':'application/json','Authorization':`Bearer ${token}`}
+  : {'Content-Type':'application/json'};
+
+async function ask() {
+  if (!token) return alert('Log in first');
+  const btn = document.getElementById('btn');
+  btn.disabled = true; btn.textContent = '⏳ …';
+  document.getElementById('out').innerHTML = '<div class="hint">supervisor is routing…</div>';
+
+  const r = await fetch('/api/ask', {
+    method:'POST', headers: auth(),
+    body: JSON.stringify({ question: document.getElementById('q').value }),
+  });
+  const d = await r.json();
+  btn.disabled = false; btn.textContent = '▶ Ask';
+
+  if (!r.ok) {
+    document.getElementById('out').innerHTML =
+      `<div class="ans" style="background:#fef2f2;border-color:#dc2626">${esc(d.detail||'failed')}</div>`;
+    return;
+  }
+
+  document.getElementById('out').innerHTML = `
+    <div style="margin:9px 0">
+      ${d.specialists.map(s=>`<span class="spec ${s}">${esc(s)}</span>`).join('')}
+      <span class="trace">verified: ${esc(d.verified_via)} · trace ${esc(d.trace_id||'—')}</span>
+    </div>
+    ${d.findings.map(f=>`<div class="finding"><b>${esc(f.role)}</b><br>${esc(f.content)}</div>`).join('')}
+    <div class="ans">${esc(d.answer)}</div>`;
+  loadJobs();
+}
+
+async function loadJobs() {
+  if (!token) return;
+  const r = await fetch('/api/jobs', { headers: auth() });
+  if (!r.ok) return;
+  const jobs = await r.json();
+  document.getElementById('jobs').innerHTML = jobs.length ? jobs.map(j =>
+    `<div class="job"><b>${esc(j.question)}</b>
+     <div class="trace">org ${j.org_id} · trace ${esc(j.trace_id||'—')}</div></div>`
+  ).join('') : '<div style="color:#999;font-size:12px">none yet</div>';
+}
+
+function esc(s){const d=document.createElement('div');d.textContent=s??'';return d.innerHTML}
+checkHealth();
+</script>
+</body>
+</html>
